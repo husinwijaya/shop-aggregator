@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.common.hash.Hashing;
+import com.google.common.io.ByteStreams;
 import net.sin.model.ECommercePlatform;
 import net.sin.model.ProductResult;
 import net.sin.model.ShopResult;
@@ -16,32 +17,19 @@ import org.slf4j.LoggerFactory;
 
 import javax.inject.Singleton;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpRequest.BodyPublishers;
-import java.net.http.HttpResponse;
-import java.net.http.HttpResponse.BodyHandlers;
+import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.Executors;
 
 import static com.google.common.net.UrlEscapers.urlFormParameterEscaper;
-import static java.time.Duration.ofSeconds;
 
 @Singleton
 public class TokopediaServiceImpl implements TokopediaService {
     private static final Logger log = LoggerFactory.getLogger(TokopediaServiceImpl.class);
 
-    private final HttpClient httpClient;
-    private final ObjectMapper objectMapper;
-
-    public TokopediaServiceImpl() {
-        httpClient = HttpClient.newBuilder().executor(Executors.newWorkStealingPool()).connectTimeout(ofSeconds(5)).build();
-        objectMapper = new ObjectMapper();
-    }
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public List<String> getSuggestion(String term) throws IOException, InterruptedException {
@@ -51,17 +39,18 @@ public class TokopediaServiceImpl implements TokopediaService {
         return extractAutocomplete(response);
     }
 
-    private String post(String requestBody) throws IOException, InterruptedException {
-        log.trace("sending request: {}", requestBody);
-        HttpRequest request = HttpRequest.newBuilder(URI.create("https://gql.tokopedia.com/"))
-                .header("referer", "https://www.tokopedia.com")
-                .POST(BodyPublishers.ofString(requestBody))
-                .timeout(ofSeconds(5))
-                .build();
-        HttpResponse<String> response = httpClient.send(request, BodyHandlers.ofString());
-        String responseBody = response.body();
-        log.trace("receive response: {}", responseBody);
-        return responseBody;
+    private String post(String requestBody) throws IOException {
+        Process curl = new ProcessBuilder("curl",
+                "--request",
+                "POST",
+                "https://gql.tokopedia.com/",
+                "--header",
+                "referer: https://www.tokopedia.com/", "--data-raw", requestBody).start();
+        try (InputStream inputStream = curl.getInputStream()) {
+            return new String(ByteStreams.toByteArray(inputStream));
+        } finally {
+            curl.destroy();
+        }
     }
 
     private String generateSuggestionRequest(String term) {
@@ -201,7 +190,7 @@ public class TokopediaServiceImpl implements TokopediaService {
 
     private String generateSearchProductByShop(long shopId, String query) {
         return String.format("[{\"operationName\":\"ShopProducts\",\"variables\":{\"sid\":\"%s\",\"page\":1,\"" +
-                "perPage\":1000,\"keyword\":\"%s\",\"etalaseId\":\"etalase\",\"sort\":1},\"query\":\"query " +
+                "perPage\":5,\"keyword\":\"%s\",\"etalaseId\":\"etalase\",\"sort\":1},\"query\":\"query " +
                 "ShopProducts($sid: String!, $page: Int, $perPage: Int, $keyword: String, $etalaseId: String," +
                 " $sort: Int) {\\n  GetShopProduct(shopID: $sid, filter: {page: $page, perPage: $perPage, fkeyword:" +
                 " $keyword, fmenu: $etalaseId, sort: $sort}) {\\n    status\\n    errors\\n    links {\\n   " +
